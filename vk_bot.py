@@ -18,6 +18,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
+        logging.FileHandler("vk_bot.log"),
         logging.StreamHandler()
     ]
 )
@@ -65,10 +66,10 @@ class VKInviteBot:
                 "access_token": os.getenv("VK_ACCESS_TOKEN"),
                 "target_group_id": os.getenv("TARGET_GROUP_ID"),  # Оставляем строку для обработки
                 "your_group_id": os.getenv("YOUR_GROUP_ID"),      # Оставляем строку для обработки
-                "max_invites_per_day": safe_int(os.getenv("MAX_INVITES_PER_DAY"), 20),
+                "max_invites_per_day": safe_int(os.getenv("MAX_INVITES_PER_DAY"), 10),  # Уменьшено до 10
                 "delay_between_invites": {     
-                    "min": safe_int(os.getenv("MIN_DELAY"), 60),
-                    "max": safe_int(os.getenv("MAX_DELAY"), 180)
+                    "min": safe_int(os.getenv("MIN_DELAY"), 300),   # Значительно увеличено (5 минут)
+                    "max": safe_int(os.getenv("MAX_DELAY"), 600)    # Значительно увеличено (10 минут)
                 },
                 "filters": {
                     "age": {
@@ -123,6 +124,9 @@ class VKInviteBot:
             except (ValueError, TypeError):
                 pass
                 
+            # Небольшая задержка перед API запросом
+            time.sleep(1.5)
+            
             # Пытаемся получить ID по короткому имени
             response = self.vk.groups.getById(group_id=group_identifier)
             if response and len(response) > 0:
@@ -146,7 +150,8 @@ class VKInviteBot:
                     "total_invites_sent": 0,
                     "invites_today": 0,
                     "last_invite_date": None,
-                    "processed_users": []
+                    "processed_users": [],
+                    "last_activity_time": None
                 }
                 self.save_stats()
         except Exception as e:
@@ -155,12 +160,16 @@ class VKInviteBot:
                 "total_invites_sent": 0,
                 "invites_today": 0,
                 "last_invite_date": None,
-                "processed_users": []
+                "processed_users": [],
+                "last_activity_time": None
             }
     
     def save_stats(self):
         """Сохранение статистики и состояния бота"""
         try:
+            # Обновляем время последней активности
+            self.stats["last_activity_time"] = datetime.now().isoformat()
+            
             with open(self.stats_file, 'w', encoding='utf-8') as f:
                 json.dump(self.stats, f, indent=4, ensure_ascii=False)
         except Exception as e:
@@ -187,6 +196,9 @@ class VKInviteBot:
             offset = 0
             
             while True:
+                # Увеличенная задержка между запросами участников
+                time.sleep(3)
+                
                 response = self.vk.groups.getMembers(
                     group_id=actual_group_id,
                     offset=offset,
@@ -204,13 +216,23 @@ class VKInviteBot:
                 if offset >= count:
                     break
                     
-                # Задержка между запросами для соблюдения ограничений API
-                time.sleep(0.4)
+                # Значительная задержка между запросами для соблюдения ограничений API
+                time.sleep(5)
                 
             logger.info(f"Получено {len(members)} участников из группы {group_id}")
+            
+            # Перемешиваем список пользователей для более естественного поведения
+            random.shuffle(members)
+            
             return members
         except Exception as e:
             logger.error(f"Ошибка получения участников группы: {e}")
+            
+            # Если получили ошибку, сделаем большую паузу и попробуем снова
+            if "captcha" in str(e).lower():
+                logger.warning("Обнаружена капча, делаем паузу в 30 минут...")
+                time.sleep(1800)  # 30 минут
+            
             import traceback
             logger.error(traceback.format_exc())
             return []
@@ -227,15 +249,21 @@ class VKInviteBot:
                 
             # Проверка, не является ли пользователь уже участником нашей группы
             try:
+                # Добавляем значительную паузу между проверками участия
+                time.sleep(2)
+                
                 actual_group_id = self.get_group_id(self.config["your_group_id"])
                 is_member = self.vk.groups.isMember(
                     group_id=actual_group_id,
                     user_id=user["id"]
                 )
+                
                 if is_member:
                     continue
             except Exception as e:
-                logger.error(f"Ошибка при проверке членства: {e}")
+                if "captcha" in str(e).lower():
+                    logger.warning("Обнаружена капча при проверке участия, делаем паузу в 20 минут...")
+                    time.sleep(1200)  # 20 минут
                 # При ошибке пропускаем пользователя
                 continue
                 
@@ -288,6 +316,9 @@ class VKInviteBot:
     def invite_user(self, user_id):
         """Отправка приглашения пользователю"""
         try:
+            # Существенная задержка перед каждым приглашением (3-7 секунд)
+            time.sleep(random.uniform(3, 7))
+            
             actual_group_id = self.get_group_id(self.config["your_group_id"])
             self.vk.groups.invite(
                 group_id=actual_group_id,
@@ -305,7 +336,15 @@ class VKInviteBot:
             logger.info(f"Успешно отправлено приглашение пользователю ID{user_id}")
             return True
         except Exception as e:
-            logger.error(f"Ошибка при отправке приглашения пользователю ID{user_id}: {e}")
+            if "captcha" in str(e).lower():
+                logger.warning(f"Капча при отправке приглашения пользователю ID{user_id}. Делаем паузу...")
+                # Значительная пауза при обнаружении капчи
+                pause_minutes = random.randint(60, 120)  # 1-2 часа
+                logger.info(f"Ожидание {pause_minutes} минут из-за капчи...")
+                time.sleep(pause_minutes * 60)
+            else:
+                logger.error(f"Ошибка при отправке приглашения пользователю ID{user_id}: {e}")
+            
             # Добавляем в обработанные, чтобы не пытаться снова
             self.stats["processed_users"].append(user_id)
             self.save_stats()
@@ -339,7 +378,10 @@ class VKInviteBot:
         
         # Отправка приглашений с учетом лимитов
         invites_left = self.config["max_invites_per_day"] - self.stats["invites_today"]
-        invites_count = min(len(filtered_users), invites_left)
+        
+        # Сокращаем максимальное количество приглашений для одного запуска
+        max_batch = min(invites_left, 5)  # Максимум 5 приглашений за один запуск
+        invites_count = min(len(filtered_users), max_batch)
         
         logger.info(f"Планируется отправить {invites_count} приглашений")
         
@@ -349,13 +391,13 @@ class VKInviteBot:
             # Отправка приглашения
             success = self.invite_user(user["id"])
             
-            # Задержка между приглашениями
+            # Значительная задержка между приглашениями
             if i < invites_count - 1 and success:
                 delay = random.randint(
                     self.config["delay_between_invites"]["min"],
                     self.config["delay_between_invites"]["max"]
                 )
-                logger.info(f"Ожидание {delay} секунд перед следующим приглашением...")
+                logger.info(f"Ожидание {delay} секунд ({delay/60:.1f} минут) перед следующим приглашением...")
                 time.sleep(delay)
         
         logger.info("Работа бота завершена")
@@ -371,11 +413,15 @@ def main():
         
         # Для Railway: запуск по расписанию с интервалом
         while True:
-            logger.info("Ожидание следующего запуска (3 часа)...")
-            time.sleep(3 * 60 * 60)  # 3 часа
+            # Значительно увеличиваем интервал между запусками (8-12 часов)
+            sleep_hours = random.uniform(8.0, 12.0)
+            logger.info(f"Ожидание следующего запуска ({sleep_hours:.2f} часов)...")
+            time.sleep(sleep_hours * 60 * 60)
             logger.info("Запуск нового цикла")
             bot = VKInviteBot()
             bot.run()
+    except KeyboardInterrupt:
+        logger.info("Программа остановлена пользователем")
     except Exception as e:
         logger.error(f"Критическая ошибка: {e}")
         import traceback
