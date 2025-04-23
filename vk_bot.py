@@ -44,38 +44,62 @@ class VKInviteBot:
     def load_config(self):
         """Загрузка настроек из переменных окружения"""
         try:
+            # Функция для безопасного преобразования в целое число
+            def safe_int(value, default=0):
+                try:
+                    return int(value)
+                except (ValueError, TypeError):
+                    # Если значение является строкой и начинается с "id" или содержит имя пользователя
+                    if isinstance(value, str):
+                        # Попытка извлечь числовой ID группы, если он в формате club12345678
+                        if value.startswith(('club', 'public')):
+                            try:
+                                return int(value[5:]) # Убираем 'club' или 'public'
+                            except ValueError:
+                                pass
+                    logger.warning(f"Не удалось преобразовать '{value}' в целое число, используется значение по умолчанию {default}")
+                    return default
+
+            # Получение конфигурации из переменных окружения
             self.config = {
                 "access_token": os.getenv("VK_ACCESS_TOKEN"),
-                "target_group_id": int(os.getenv("TARGET_GROUP_ID")),
-                "your_group_id": int(os.getenv("YOUR_GROUP_ID")),
-                "max_invites_per_day": int(os.getenv("MAX_INVITES_PER_DAY", "20")),
+                "target_group_id": os.getenv("TARGET_GROUP_ID"),  # Оставляем строку для обработки
+                "your_group_id": os.getenv("YOUR_GROUP_ID"),      # Оставляем строку для обработки
+                "max_invites_per_day": safe_int(os.getenv("MAX_INVITES_PER_DAY"), 20),
                 "delay_between_invites": {     
-                    "min": int(os.getenv("MIN_DELAY", "60")),
-                    "max": int(os.getenv("MAX_DELAY", "180"))
+                    "min": safe_int(os.getenv("MIN_DELAY"), 60),
+                    "max": safe_int(os.getenv("MAX_DELAY"), 180)
                 },
                 "filters": {
                     "age": {
                         "enabled": os.getenv("FILTER_AGE_ENABLED", "False").lower() == "true",
-                        "min": int(os.getenv("FILTER_AGE_MIN", "18")),
-                        "max": int(os.getenv("FILTER_AGE_MAX", "50"))
+                        "min": safe_int(os.getenv("FILTER_AGE_MIN"), 18),
+                        "max": safe_int(os.getenv("FILTER_AGE_MAX"), 50)
                     },
                     "sex": {
                         "enabled": os.getenv("FILTER_SEX_ENABLED", "False").lower() == "true",
-                        "value": int(os.getenv("FILTER_SEX_VALUE", "0"))
+                        "value": safe_int(os.getenv("FILTER_SEX_VALUE"), 0)
                     },
                     "city_id": {
                         "enabled": os.getenv("FILTER_CITY_ENABLED", "False").lower() == "true",
-                        "value": int(os.getenv("FILTER_CITY_VALUE", "1"))
+                        "value": safe_int(os.getenv("FILTER_CITY_VALUE"), 1)
                     },
                     "has_photo": {
                         "enabled": os.getenv("FILTER_PHOTO_ENABLED", "False").lower() == "true"
                     },
                     "last_seen_days": {
                         "enabled": os.getenv("FILTER_LAST_SEEN_ENABLED", "True").lower() == "true",
-                        "value": int(os.getenv("FILTER_LAST_SEEN_DAYS", "30"))
+                        "value": safe_int(os.getenv("FILTER_LAST_SEEN_DAYS"), 30)
                     }
                 }
             }
+            
+            # Обработка ID группы, позволяем использовать короткое имя или полный URL
+            target_group = self.config["target_group_id"]
+            your_group = self.config["your_group_id"]
+            
+            logger.info(f"Исходное значение TARGET_GROUP_ID: {target_group}")
+            logger.info(f"Исходное значение YOUR_GROUP_ID: {your_group}")
             
             # Проверка обязательных параметров
             if not self.config["access_token"]:
@@ -86,7 +110,30 @@ class VKInviteBot:
                 
         except Exception as e:
             logger.error(f"Ошибка загрузки конфигурации: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             exit(1)
+    
+    def get_group_id(self, group_identifier):
+        """Получение числового ID группы по короткому имени или строковому ID"""
+        try:
+            # Если это уже число, просто возвращаем его
+            try:
+                return int(group_identifier)
+            except (ValueError, TypeError):
+                pass
+                
+            # Пытаемся получить ID по короткому имени
+            response = self.vk.groups.getById(group_id=group_identifier)
+            if response and len(response) > 0:
+                return response[0]['id']
+                
+            logger.warning(f"Не удалось получить ID группы для '{group_identifier}', используется как есть")
+            return group_identifier
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения ID группы: {e}")
+            return group_identifier
     
     def load_stats(self):
         """Загрузка статистики и состояния бота"""
@@ -132,12 +179,16 @@ class VKInviteBot:
     def get_group_members(self, group_id, count=1000):
         """Получение списка участников группы"""
         try:
+            # Получаем числовой ID группы, если передано короткое имя
+            actual_group_id = self.get_group_id(group_id)
+            logger.info(f"Получение участников группы: {group_id} (ID: {actual_group_id})")
+            
             members = []
             offset = 0
             
             while True:
                 response = self.vk.groups.getMembers(
-                    group_id=group_id,
+                    group_id=actual_group_id,
                     offset=offset,
                     count=1000,
                     fields="sex,bdate,city,last_seen,has_photo"
@@ -156,10 +207,12 @@ class VKInviteBot:
                 # Задержка между запросами для соблюдения ограничений API
                 time.sleep(0.4)
                 
-            logger.info(f"Получено {len(members)} участников из группы ID{group_id}")
+            logger.info(f"Получено {len(members)} участников из группы {group_id}")
             return members
         except Exception as e:
             logger.error(f"Ошибка получения участников группы: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return []
     
     def filter_users(self, users):
@@ -174,13 +227,15 @@ class VKInviteBot:
                 
             # Проверка, не является ли пользователь уже участником нашей группы
             try:
+                actual_group_id = self.get_group_id(self.config["your_group_id"])
                 is_member = self.vk.groups.isMember(
-                    group_id=self.config["your_group_id"],
+                    group_id=actual_group_id,
                     user_id=user["id"]
                 )
                 if is_member:
                     continue
-            except:
+            except Exception as e:
+                logger.error(f"Ошибка при проверке членства: {e}")
                 # При ошибке пропускаем пользователя
                 continue
                 
@@ -233,8 +288,9 @@ class VKInviteBot:
     def invite_user(self, user_id):
         """Отправка приглашения пользователю"""
         try:
+            actual_group_id = self.get_group_id(self.config["your_group_id"])
             self.vk.groups.invite(
-                group_id=self.config["your_group_id"],
+                group_id=actual_group_id,
                 user_id=user_id
             )
             
@@ -270,8 +326,16 @@ class VKInviteBot:
         # Получение участников целевой группы
         target_users = self.get_group_members(self.config["target_group_id"])
         
+        if not target_users:
+            logger.error("Не удалось получить пользователей целевой группы. Проверьте ID группы.")
+            return
+            
         # Фильтрация подходящих пользователей
         filtered_users = self.filter_users(target_users)
+        
+        if not filtered_users:
+            logger.warning("Не найдено подходящих пользователей для приглашения.")
+            return
         
         # Отправка приглашений с учетом лимитов
         invites_left = self.config["max_invites_per_day"] - self.stats["invites_today"]
@@ -301,16 +365,21 @@ def main():
     logger.info("=" * 50)
     logger.info("Запуск программы")
     
-    bot = VKInviteBot()
-    bot.run()
-    
-    # Для Railway: запуск по расписанию с интервалом
-    while True:
-        logger.info("Ожидание следующего запуска (3 часа)...")
-        time.sleep(3 * 60 * 60)  # 3 часа
-        logger.info("Запуск нового цикла")
+    try:
         bot = VKInviteBot()
         bot.run()
+        
+        # Для Railway: запуск по расписанию с интервалом
+        while True:
+            logger.info("Ожидание следующего запуска (3 часа)...")
+            time.sleep(3 * 60 * 60)  # 3 часа
+            logger.info("Запуск нового цикла")
+            bot = VKInviteBot()
+            bot.run()
+    except Exception as e:
+        logger.error(f"Критическая ошибка: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
 
 if __name__ == "__main__":
     main()
