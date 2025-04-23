@@ -66,10 +66,10 @@ class VKInviteBot:
                 "access_token": os.getenv("VK_ACCESS_TOKEN"),
                 "target_group_id": os.getenv("TARGET_GROUP_ID"),  # Оставляем строку для обработки
                 "your_group_id": os.getenv("YOUR_GROUP_ID"),      # Оставляем строку для обработки
-                "max_invites_per_day": safe_int(os.getenv("MAX_INVITES_PER_DAY"), 10),  # Уменьшено до 10
+                "max_invites_per_day": safe_int(os.getenv("MAX_INVITES_PER_DAY"), 20),
                 "delay_between_invites": {     
-                    "min": safe_int(os.getenv("MIN_DELAY"), 300),   # Значительно увеличено (5 минут)
-                    "max": safe_int(os.getenv("MAX_DELAY"), 600)    # Значительно увеличено (10 минут)
+                    "min": safe_int(os.getenv("MIN_DELAY"), 120),   # Умеренная задержка (2 минуты)
+                    "max": safe_int(os.getenv("MAX_DELAY"), 240)    # Умеренная задержка (4 минуты)
                 },
                 "filters": {
                     "age": {
@@ -125,7 +125,7 @@ class VKInviteBot:
                 pass
                 
             # Небольшая задержка перед API запросом
-            time.sleep(1.5)
+            time.sleep(1)
             
             # Пытаемся получить ID по короткому имени
             response = self.vk.groups.getById(group_id=group_identifier)
@@ -151,9 +151,16 @@ class VKInviteBot:
                     "invites_today": 0,
                     "last_invite_date": None,
                     "processed_users": [],
+                    "users_with_privacy_restrictions": [],
                     "last_activity_time": None
                 }
                 self.save_stats()
+                
+            # Проверка наличия поля для пользователей с ограничениями приватности
+            if "users_with_privacy_restrictions" not in self.stats:
+                self.stats["users_with_privacy_restrictions"] = []
+                self.save_stats()
+                
         except Exception as e:
             logger.error(f"Ошибка загрузки статистики: {e}")
             self.stats = {
@@ -161,6 +168,7 @@ class VKInviteBot:
                 "invites_today": 0,
                 "last_invite_date": None,
                 "processed_users": [],
+                "users_with_privacy_restrictions": [],
                 "last_activity_time": None
             }
     
@@ -196,8 +204,8 @@ class VKInviteBot:
             offset = 0
             
             while True:
-                # Увеличенная задержка между запросами участников
-                time.sleep(3)
+                # Небольшая задержка между запросами
+                time.sleep(1)
                 
                 response = self.vk.groups.getMembers(
                     group_id=actual_group_id,
@@ -216,8 +224,8 @@ class VKInviteBot:
                 if offset >= count:
                     break
                     
-                # Значительная задержка между запросами для соблюдения ограничений API
-                time.sleep(5)
+                # Задержка между запросами для соблюдения ограничений API
+                time.sleep(2)
                 
             logger.info(f"Получено {len(members)} участников из группы {group_id}")
             
@@ -228,10 +236,10 @@ class VKInviteBot:
         except Exception as e:
             logger.error(f"Ошибка получения участников группы: {e}")
             
-            # Если получили ошибку, сделаем большую паузу и попробуем снова
+            # Если получили ошибку, сделаем паузу и попробуем снова
             if "captcha" in str(e).lower():
-                logger.warning("Обнаружена капча, делаем паузу в 30 минут...")
-                time.sleep(1800)  # 30 минут
+                logger.warning("Обнаружена капча, делаем паузу в 15 минут...")
+                time.sleep(900)  # 15 минут
             
             import traceback
             logger.error(traceback.format_exc())
@@ -247,10 +255,13 @@ class VKInviteBot:
             if user["id"] in self.stats["processed_users"]:
                 continue
                 
+            # Пропускаем пользователей с известными ограничениями приватности
+            if user["id"] in self.stats["users_with_privacy_restrictions"]:
+                continue
+                
             # Проверка, не является ли пользователь уже участником нашей группы
             try:
-                # Добавляем значительную паузу между проверками участия
-                time.sleep(2)
+                time.sleep(0.5)  # Небольшая задержка
                 
                 actual_group_id = self.get_group_id(self.config["your_group_id"])
                 is_member = self.vk.groups.isMember(
@@ -262,8 +273,8 @@ class VKInviteBot:
                     continue
             except Exception as e:
                 if "captcha" in str(e).lower():
-                    logger.warning("Обнаружена капча при проверке участия, делаем паузу в 20 минут...")
-                    time.sleep(1200)  # 20 минут
+                    logger.warning("Обнаружена капча при проверке участия, делаем паузу в 10 минут...")
+                    time.sleep(600)  # 10 минут
                 # При ошибке пропускаем пользователя
                 continue
                 
@@ -316,11 +327,11 @@ class VKInviteBot:
     def invite_user(self, user_id):
         """Отправка приглашения пользователю"""
         try:
-            # Существенная задержка перед каждым приглашением (3-7 секунд)
-            time.sleep(random.uniform(3, 7))
+            # Небольшая задержка перед приглашением
+            time.sleep(random.uniform(1, 3))
             
             actual_group_id = self.get_group_id(self.config["your_group_id"])
-            self.vk.groups.invite(
+            result = self.vk.groups.invite(
                 group_id=actual_group_id,
                 user_id=user_id
             )
@@ -336,18 +347,25 @@ class VKInviteBot:
             logger.info(f"Успешно отправлено приглашение пользователю ID{user_id}")
             return True
         except Exception as e:
-            if "captcha" in str(e).lower():
+            error_msg = str(e).lower()
+            
+            if "captcha" in error_msg:
                 logger.warning(f"Капча при отправке приглашения пользователю ID{user_id}. Делаем паузу...")
-                # Значительная пауза при обнаружении капчи
-                pause_minutes = random.randint(60, 120)  # 1-2 часа
-                logger.info(f"Ожидание {pause_minutes} минут из-за капчи...")
-                time.sleep(pause_minutes * 60)
+                # Пауза при обнаружении капчи
+                time.sleep(900)  # 15 минут
+            elif "permission to add" in error_msg or "can't add this user" in error_msg or "user disabled invites" in error_msg or "access denied" in error_msg:
+                # Пользователь ограничил возможность приглашения в группы
+                logger.info(f"Пользователь ID{user_id} ограничил возможность приглашения в группы")
+                # Добавляем его в список пользователей с ограничениями приватности
+                self.stats["users_with_privacy_restrictions"].append(user_id)
+                self.stats["processed_users"].append(user_id)
+                self.save_stats()
             else:
                 logger.error(f"Ошибка при отправке приглашения пользователю ID{user_id}: {e}")
-            
-            # Добавляем в обработанные, чтобы не пытаться снова
-            self.stats["processed_users"].append(user_id)
-            self.save_stats()
+                # Добавляем в обработанные, чтобы не пытаться снова
+                self.stats["processed_users"].append(user_id)
+                self.save_stats()
+                
             return False
     
     def run(self):
@@ -379,20 +397,37 @@ class VKInviteBot:
         # Отправка приглашений с учетом лимитов
         invites_left = self.config["max_invites_per_day"] - self.stats["invites_today"]
         
-        # Сокращаем максимальное количество приглашений для одного запуска
-        max_batch = min(invites_left, 5)  # Максимум 5 приглашений за один запуск
+        # Ограничение для одного запуска
+        max_batch = min(invites_left, 10)  # Максимум 10 приглашений за один запуск
         invites_count = min(len(filtered_users), max_batch)
         
         logger.info(f"Планируется отправить {invites_count} приглашений")
+        
+        # Счетчики для статистики
+        success_count = 0
+        privacy_restricted_count = 0
+        error_count = 0
         
         for i in range(invites_count):
             user = filtered_users[i]
             
             # Отправка приглашения
-            success = self.invite_user(user["id"])
+            try:
+                result = self.invite_user(user["id"])
+                if result:
+                    success_count += 1
+                else:
+                    # Проверка, не был ли пользователь добавлен в список с ограничениями приватности
+                    if user["id"] in self.stats["users_with_privacy_restrictions"]:
+                        privacy_restricted_count += 1
+                    else:
+                        error_count += 1
+            except Exception as e:
+                logger.error(f"Непредвиденная ошибка при обработке пользователя ID{user['id']}: {e}")
+                error_count += 1
             
-            # Значительная задержка между приглашениями
-            if i < invites_count - 1 and success:
+            # Задержка между приглашениями
+            if i < invites_count - 1:
                 delay = random.randint(
                     self.config["delay_between_invites"]["min"],
                     self.config["delay_between_invites"]["max"]
@@ -400,7 +435,14 @@ class VKInviteBot:
                 logger.info(f"Ожидание {delay} секунд ({delay/60:.1f} минут) перед следующим приглашением...")
                 time.sleep(delay)
         
+        # Итоговая статистика
+        logger.info(f"Успешно отправлено: {success_count} приглашений")
+        logger.info(f"Пользователей с ограничениями приватности: {privacy_restricted_count}")
+        logger.info(f"Ошибок: {error_count}")
         logger.info("Работа бота завершена")
+        
+        # Сколько пользователей всего в базе с ограничениями приватности
+        logger.info(f"Всего пользователей с ограничениями приватности в базе: {len(self.stats['users_with_privacy_restrictions'])}")
 
 def main():
     """Точка входа в программу"""
@@ -413,8 +455,8 @@ def main():
         
         # Для Railway: запуск по расписанию с интервалом
         while True:
-            # Значительно увеличиваем интервал между запусками (8-12 часов)
-            sleep_hours = random.uniform(8.0, 12.0)
+            # Интервал между запусками (4-6 часов)
+            sleep_hours = random.uniform(4.0, 6.0)
             logger.info(f"Ожидание следующего запуска ({sleep_hours:.2f} часов)...")
             time.sleep(sleep_hours * 60 * 60)
             logger.info("Запуск нового цикла")
